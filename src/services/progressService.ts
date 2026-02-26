@@ -1,4 +1,5 @@
 import { VideoProgress, PdfProgress, LessonNote, ModuleProgress, CourseModule } from '../types'
+export type { LessonNote }
 
 const key = (userId: string, fileId: string, suffix: string) =>
   `ds:${userId}:${fileId}:${suffix}`
