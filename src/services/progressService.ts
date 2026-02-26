@@ -1,8 +1,52 @@
 import { VideoProgress, PdfProgress, LessonNote, ModuleProgress, CourseModule } from '../types'
 export type { LessonNote }
+import { db } from './firebase'
+import { doc, setDoc, getDocs, collection } from 'firebase/firestore'
 
 const key = (userId: string, fileId: string, suffix: string) =>
   `ds:${userId}:${fileId}:${suffix}`
+
+// ── Sync from Firebase ────────────────────────────────────────────────────────
+
+export async function syncFromFirebase(userId: string) {
+  if (!userId) return
+
+  try {
+    // 1. Videos
+    const vSnap = await getDocs(collection(db, `users/${userId}/videos`))
+    vSnap.forEach((snapDoc: any) => {
+      localStorage.setItem(key(userId, snapDoc.id, 'video'), JSON.stringify(snapDoc.data()))
+    })
+
+    // 2. PDFs
+    const pSnap = await getDocs(collection(db, `users/${userId}/pdfs`))
+    pSnap.forEach((snapDoc: any) => {
+      localStorage.setItem(key(userId, snapDoc.id, 'pdf'), JSON.stringify(snapDoc.data()))
+    })
+
+    // 3. Notes
+    const nSnap = await getDocs(collection(db, `users/${userId}/notes`))
+    nSnap.forEach((snapDoc: any) => {
+      const data = snapDoc.data()
+      if (data.items) {
+        localStorage.setItem(`ds:${userId}:notes:${snapDoc.id}`, JSON.stringify(data.items))
+      }
+    })
+
+    // 4. Recent Courses
+    const rSnap = await getDocs(collection(db, `users/${userId}/recentCourses`))
+    rSnap.forEach((snapDoc: any) => {
+      if (snapDoc.id === 'list') {
+        const data = snapDoc.data()
+        if (data.items) {
+          localStorage.setItem('ds:recentCourses', JSON.stringify(data.items))
+        }
+      }
+    })
+  } catch (err) {
+    console.error('Error syncing from Firebase:', err)
+  }
+}
 
 // ── Video Progress ────────────────────────────────────────────────────────────
 
@@ -27,7 +71,12 @@ export function saveVideoProgress(userId: string, fileId: string, data: Partial<
     ...data,
     lastWatched: Date.now(),
   }
+
+  // Local
   localStorage.setItem(key(userId, fileId, 'video'), JSON.stringify(updated))
+
+  // Firebase
+  setDoc(doc(db, `users/${userId}/videos/${fileId}`), updated, { merge: true }).catch(console.error)
 }
 
 export function markVideoCompleted(userId: string, fileId: string) {
@@ -57,7 +106,12 @@ export function savePdfProgress(userId: string, fileId: string, data: Partial<Pd
     ...data,
     lastRead: Date.now(),
   }
+
+  // Local
   localStorage.setItem(key(userId, fileId, 'pdf'), JSON.stringify(updated))
+
+  // Firebase
+  setDoc(doc(db, `users/${userId}/pdfs/${fileId}`), updated, { merge: true }).catch(console.error)
 }
 
 export function markPdfCompleted(userId: string, fileId: string) {
@@ -91,13 +145,24 @@ export function saveNote(userId: string, context: string, content: string, exist
     }
     notes.unshift(newNote)
   }
+
+  // Local
   localStorage.setItem(`ds:${userId}:notes:${context}`, JSON.stringify(notes))
+
+  // Firebase (save entire array)
+  setDoc(doc(db, `users/${userId}/notes/${context}`), { items: notes }, { merge: true }).catch(console.error)
+
   return notes[existingId ? notes.findIndex(n => n.id === existingId) : 0]
 }
 
 export function deleteNote(userId: string, context: string, noteId: string) {
   const notes = getNotes(userId, context).filter(n => n.id !== noteId)
+
+  // Local
   localStorage.setItem(`ds:${userId}:notes:${context}`, JSON.stringify(notes))
+
+  // Firebase
+  setDoc(doc(db, `users/${userId}/notes/${context}`), { items: notes }, { merge: true }).catch(console.error)
 }
 
 // ── Progress Calculation ──────────────────────────────────────────────────────
@@ -149,6 +214,7 @@ export interface RecentCourse {
   lastAccessed: number
 }
 
+// Helper getter that doesn't need userId for backwards compat
 export function getRecentCourses(): RecentCourse[] {
   try {
     const raw = localStorage.getItem('ds:recentCourses')
@@ -158,8 +224,18 @@ export function getRecentCourses(): RecentCourse[] {
   }
 }
 
-export function addRecentCourse(course: RecentCourse) {
+// Pass userId inside optional object if we want to sync it
+export function addRecentCourse(course: RecentCourse, userId?: string) {
   const courses = getRecentCourses().filter(c => c.folderId !== course.folderId)
   courses.unshift(course)
-  localStorage.setItem('ds:recentCourses', JSON.stringify(courses.slice(0, 10)))
+
+  const limitedCourses = courses.slice(0, 10)
+
+  // Local
+  localStorage.setItem('ds:recentCourses', JSON.stringify(limitedCourses))
+
+  // Firebase
+  if (userId) {
+    setDoc(doc(db, `users/${userId}/recentCourses/list`), { items: limitedCourses }, { merge: true }).catch(console.error)
+  }
 }

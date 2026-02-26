@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { User } from '../types'
+import { syncFromFirebase } from '../services/progressService'
 
 interface AuthContextValue {
   user: User | null
@@ -32,10 +33,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const login = useCallback((token: string, userInfo: Omit<User, 'token'>) => {
+  const login = useCallback(async (token: string, userInfo: Omit<User, 'token'>) => {
     const u: User = { ...userInfo, token }
     setUser(u)
     sessionStorage.setItem('ds:user', JSON.stringify(u))
+    await syncFromFirebase(u.email)
   }, [])
 
   const logout = useCallback(() => {

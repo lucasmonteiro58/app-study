@@ -31,7 +31,7 @@ export default function HomePage() {
     setLoading(true)
     try {
       const { name, modules } = await buildCourseStructure(folderId, user!.token)
-      addRecentCourse({ folderId, name, url: url.trim(), lastAccessed: Date.now() })
+      addRecentCourse({ folderId, name, url: url.trim(), lastAccessed: Date.now() }, user?.email)
       // Store course in sessionStorage for the dashboard
       sessionStorage.setItem(`ds:course:${folderId}`, JSON.stringify({ name, modules }))
       navigate(`/course/${folderId}`)
