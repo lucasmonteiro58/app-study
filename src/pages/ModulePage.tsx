@@ -208,7 +208,7 @@ export default function ModulePage() {
   const [, forceUpdate] = useState(0)
 
   useEffect(() => {
-    const cached = sessionStorage.getItem(`ds:course:${folderId}`)
+    const cached = localStorage.getItem(`ds:course:${folderId}`)
     if (cached) setCourseData(JSON.parse(cached))
   }, [folderId])
 
