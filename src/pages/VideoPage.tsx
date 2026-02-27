@@ -14,6 +14,8 @@ export default function VideoPage() {
   const location = useLocation()
   const lesson: CourseLesson | undefined = location.state?.lesson
   const courseData = location.state?.courseData
+  const module = location.state?.module
+  const topic = location.state?.topic
 
   const [completed, setCompleted] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
@@ -42,7 +44,12 @@ export default function VideoPage() {
   return (
     <div className="min-h-screen bg-surface-900 bg-mesh">
       <Navbar
-        title={courseData?.name}
+        breadcrumbs={[
+          courseData?.name,
+          module?.name,
+          topic?.name,
+          lesson?.name,
+        ].filter(Boolean) as string[]}
         showBackButton
         backTo={lesson ? `/course/${folderId}/module/${location.state?.module?.id}` : `/course/${folderId}`}
       />
@@ -57,6 +64,9 @@ export default function VideoPage() {
                 <span className="badge-video">Vídeo</span>
                 {completed && <span className="badge-done flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Concluído</span>}
               </div>
+              {topic?.name && (
+                <p className="text-sm text-brand-400 font-medium mb-1">{topic.name}</p>
+              )}
               <h1 className="text-2xl font-bold text-white">{lesson?.name || 'Vídeo'}</h1>
             </div>
 

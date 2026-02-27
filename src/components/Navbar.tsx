@@ -3,12 +3,13 @@ import { useAuth } from '../contexts/AuthContext'
 import { BookOpen, ChevronLeft, LogOut, User } from 'lucide-react'
 
 interface NavbarProps {
-  title?: string
+  /** Itens do breadcrumb em ordem: [pasta do drive, curso, módulo, tópico, aula...] */
+  breadcrumbs?: string[]
   showBackButton?: boolean
   backTo?: string
 }
 
-export default function Navbar({ title, showBackButton = true, backTo }: NavbarProps) {
+export default function Navbar({ breadcrumbs = [], showBackButton = true, backTo }: NavbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -45,13 +46,22 @@ export default function Navbar({ title, showBackButton = true, backTo }: NavbarP
           <span className="font-bold text-white hidden sm:block">DriveStudy</span>
         </button>
 
-        {/* Title */}
-        {title && (
-          <>
+        {/* Breadcrumb */}
+        {breadcrumbs.map((item, idx) => (
+          <span key={idx} className="flex items-center gap-1 min-w-0">
             <span className="text-gray-700">/</span>
-            <span className="text-gray-300 font-medium truncate max-w-xs">{title}</span>
-          </>
-        )}
+            <span
+              className={`font-medium truncate hidden sm:block ${
+                idx === breadcrumbs.length - 1
+                  ? 'text-white max-w-[200px]'
+                  : 'text-gray-400 max-w-[120px]'
+              }`}
+              title={item}
+            >
+              {item}
+            </span>
+          </span>
+        ))}
 
         <div className="flex-1" />
 

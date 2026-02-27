@@ -25,7 +25,7 @@ export default function CourseDashboard() {
   useEffect(() => {
     if (!folderId || !user) return
 
-    const cached = sessionStorage.getItem(`ds:course:${folderId}`)
+    const cached = localStorage.getItem(`ds:course:${folderId}`)
     if (cached) {
       setCourseData(JSON.parse(cached))
       setLoading(false)
@@ -34,7 +34,7 @@ export default function CourseDashboard() {
 
     buildCourseStructure(folderId, user.token)
       .then(data => {
-        sessionStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data))
+        localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data))
         setCourseData(data)
       })
       .catch(err => setError(err.message))
@@ -77,7 +77,7 @@ export default function CourseDashboard() {
 
   return (
     <div className="min-h-screen bg-surface-900 bg-mesh">
-      <Navbar title={courseData.name} />
+      <Navbar breadcrumbs={[courseData.name]} />
 
       <div className="max-w-6xl mx-auto px-4 pt-24 pb-16">
         {/* Course Header */}
@@ -96,10 +96,10 @@ export default function CourseDashboard() {
           </div>
           <button
             onClick={() => {
-              sessionStorage.removeItem(`ds:course:${folderId}`)
+              localStorage.removeItem(`ds:course:${folderId}`)
               setLoading(true)
               buildCourseStructure(folderId!, user!.token)
-                .then(data => { sessionStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data)); setCourseData(data) })
+                .then(data => { localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data)); setCourseData(data) })
                 .catch(err => setError(err.message))
                 .finally(() => setLoading(false))
             }}

@@ -250,9 +250,9 @@ export default function ModulePage() {
   function openLesson(lesson: CourseLesson) {
     setActiveLesson(lesson.id)
     if (lesson.type === 'video') {
-      navigate(`/course/${folderId}/watch/${lesson.fileId}`, { state: { lesson, module, courseData } })
+      navigate(`/course/${folderId}/watch/${lesson.fileId}`, { state: { lesson, module, topic: selectedTopic, courseData } })
     } else if (lesson.type === 'pdf') {
-      navigate(`/course/${folderId}/read/${lesson.fileId}`, { state: { lesson, module, courseData } })
+      navigate(`/course/${folderId}/read/${lesson.fileId}`, { state: { lesson, module, topic: selectedTopic, courseData } })
     }
     setTimeout(() => forceUpdate(n => n + 1), 300)
   }
@@ -268,7 +268,7 @@ export default function ModulePage() {
 
   return (
     <div className="min-h-screen bg-surface-900 bg-mesh">
-      <Navbar title={courseData.name} showBackButton backTo={`/course/${folderId}`} />
+      <Navbar breadcrumbs={[courseData.name, module.name]} showBackButton backTo={`/course/${folderId}`} />
 
       <div className="max-w-7xl mx-auto px-4 pt-24 pb-16 flex gap-6">
 
