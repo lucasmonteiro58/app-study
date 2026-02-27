@@ -24,7 +24,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const stored = sessionStorage.getItem('ds:user')
       if (stored) {
-        setUser(JSON.parse(stored))
+        const u: User = JSON.parse(stored)
+        setUser(u)
+        // Sync Firebase data for returning users (not just on login)
+        syncFromFirebase(u.email).catch(console.error)
       }
     } catch {
       /* ignore */

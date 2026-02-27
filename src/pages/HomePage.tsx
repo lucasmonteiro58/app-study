@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { parseGoogleDriveUrl, buildCourseStructure } from '../services/driveService'
-import { addRecentCourse, getRecentCourses, RecentCourse } from '../services/progressService'
+import { addRecentCourse, getRecentCourses, getRecentCoursesFromFirebase, RecentCourse } from '../services/progressService'
 import Navbar from '../components/Navbar'
 import { FolderOpen, ArrowRight, Clock, Loader2, AlertCircle, BookOpen } from 'lucide-react'
 
@@ -12,7 +12,13 @@ export default function HomePage() {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [recentCourses] = useState<RecentCourse[]>(getRecentCourses)
+  const [recentCourses, setRecentCourses] = useState<RecentCourse[]>(getRecentCourses)
+
+  // Sync from Firebase on mount to get cross-device courses
+  useEffect(() => {
+    if (!user?.email) return
+    getRecentCoursesFromFirebase(user.email).then(setRecentCourses)
+  }, [user?.email])
   const inputRef = useRef<HTMLInputElement>(null)
 
   async function handleLoad() {
@@ -32,8 +38,9 @@ export default function HomePage() {
     try {
       const { name, modules } = await buildCourseStructure(folderId, user!.token)
       addRecentCourse({ folderId, name, url: url.trim(), lastAccessed: Date.now() }, user?.email)
-      // Store course in sessionStorage for the dashboard
-      sessionStorage.setItem(`ds:course:${folderId}`, JSON.stringify({ name, modules }))
+      // Store course in localStorage for the dashboard
+      localStorage.setItem(`ds:course:${folderId}`, JSON.stringify({ name, modules }))
+      setRecentCourses(getRecentCourses())
       navigate(`/course/${folderId}`)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro desconhecido'

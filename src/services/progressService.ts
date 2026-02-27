@@ -1,7 +1,7 @@
 import { VideoProgress, PdfProgress, LessonNote, ModuleProgress, CourseModule } from '../types'
 export type { LessonNote }
 import { db } from './firebase'
-import { doc, setDoc, getDocs, collection } from 'firebase/firestore'
+import { doc, setDoc, getDocs, getDoc, collection } from 'firebase/firestore'
 
 const key = (userId: string, fileId: string, suffix: string) =>
   `ds:${userId}:${fileId}:${suffix}`
@@ -238,4 +238,33 @@ export function addRecentCourse(course: RecentCourse, userId?: string) {
   if (userId) {
     setDoc(doc(db, `users/${userId}/recentCourses/list`), { items: limitedCourses }, { merge: true }).catch(console.error)
   }
+}
+
+/** Fetches the recent courses list directly from Firestore and updates localStorage. */
+export async function getRecentCoursesFromFirebase(userId: string): Promise<RecentCourse[]> {
+  if (!userId) return getRecentCourses()
+  try {
+    const snap = await getDoc(doc(db, `users/${userId}/recentCourses/list`))
+    if (snap.exists()) {
+      const items: RecentCourse[] = snap.data().items ?? []
+      // Merge with local (local wins if same folderId — keeps most-recent lastAccessed)
+      const local = getRecentCourses()
+      const merged = [...items]
+      for (const lc of local) {
+        const idx = merged.findIndex(r => r.folderId === lc.folderId)
+        if (idx === -1) {
+          merged.push(lc)
+        } else if (lc.lastAccessed > merged[idx].lastAccessed) {
+          merged[idx] = lc
+        }
+      }
+      merged.sort((a, b) => b.lastAccessed - a.lastAccessed)
+      const limited = merged.slice(0, 10)
+      localStorage.setItem('ds:recentCourses', JSON.stringify(limited))
+      return limited
+    }
+  } catch (err) {
+    console.error('Error fetching recent courses from Firebase:', err)
+  }
+  return getRecentCourses()
 }
