@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CourseLesson } from '../types'
@@ -28,19 +28,24 @@ export default function PdfPage() {
 
   const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
+  const [displayedPage, setDisplayedPage] = useState(1)  // the page shown (lags behind currentPage while rendering)
+  const [pageRendering, setPageRendering] = useState(false)
   const [scale, setScale] = useState(1.0)
   const [completed, setCompleted] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
   const [pdfError, setPdfError] = useState('')
 
-  // Construct the proxied PDF URL using Drive API with the user's token
-  const pdfUrl = fileId
-    ? {
-        url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        httpHeaders: { Authorization: `Bearer ${user?.token}` },
-        withCredentials: false,
-      }
-    : null
+  // Memoize so the object reference stays stable across renders.
+  // Without this, every state change creates a new object → Document
+  // treats it as a new file and shows "Carregando PDF..." again.
+  const pdfUrl = useMemo(() => {
+    if (!fileId || !user?.token) return null
+    return {
+      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      httpHeaders: { Authorization: `Bearer ${user.token}` },
+      withCredentials: false,
+    }
+  }, [fileId, user?.token])
 
   useEffect(() => {
     if (!user || !fileId) return
@@ -69,13 +74,21 @@ export default function PdfPage() {
 
   function onDocumentLoadSuccess({ numPages: np }: { numPages: number }) {
     setNumPages(np)
+    setDisplayedPage(currentPage)  // sync on initial load
     savePdfProgress(user!.email, fileId!, { totalPages: np })
   }
 
   function goToPage(page: number) {
     const p = Math.max(1, Math.min(page, numPages))
+    if (p === currentPage) return
+    setPageRendering(true)
     setCurrentPage(p)
     savePage(p)
+  }
+
+  function handlePageRenderSuccess({ pageNumber }: { pageNumber: number }) {
+    setDisplayedPage(pageNumber)
+    setPageRendering(false)
   }
 
   function handleToggleComplete() {
@@ -191,15 +204,37 @@ export default function PdfPage() {
                     </div>
                   }
                 >
-                  <Page
-                    pageNumber={currentPage}
-                    scale={scale}
-                    loading={
-                      <div className="flex items-center justify-center py-24">
-                        <Loader2 className="w-6 h-6 text-brand-400 animate-spin" />
+                  {/* Render both the displayed (stable) and current (incoming) pages.
+                      The incoming page is invisible until it finishes rendering,
+                      then replaces the stable one — no loading flash between pages. */}
+                  <div className="relative">
+                    {/* Stable page — visible while new one renders */}
+                    {pageRendering && displayedPage !== currentPage && (
+                      <div className="absolute inset-0 z-0">
+                        <Page
+                          pageNumber={displayedPage}
+                          scale={scale}
+                          loading={null}
+                          renderAnnotationLayer
+                          renderTextLayer
+                        />
                       </div>
-                    }
-                  />
+                    )}
+                    {/* Incoming page — fades in once rendered */}
+                    <div
+                      className="relative z-10 transition-opacity duration-200"
+                      style={{ opacity: pageRendering ? 0 : 1 }}
+                    >
+                      <Page
+                        pageNumber={currentPage}
+                        scale={scale}
+                        loading={null}
+                        renderAnnotationLayer
+                        renderTextLayer
+                        onRenderSuccess={handlePageRenderSuccess}
+                      />
+                    </div>
+                  </div>
                 </Document>
               )}
             </div>
