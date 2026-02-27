@@ -3,9 +3,10 @@ import { useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CourseLesson } from '../types'
 import { getVideoProgress, saveVideoProgress, markVideoCompleted } from '../services/progressService'
+import { getCachedVideo, setCachedVideo, deleteCachedVideo, isVideoCached } from '../services/videoCacheService'
 import Navbar from '../components/Navbar'
 import NotesPanel from '../components/NotesPanel'
-import { CheckCircle2, StickyNote, ExternalLink, AlertTriangle, RefreshCw, Download } from 'lucide-react'
+import { CheckCircle2, StickyNote, ExternalLink, AlertTriangle, RefreshCw, Download, HardDrive, Trash2 } from 'lucide-react'
 
 type PlayerMode = 'loading' | 'native' | 'iframe' | 'error'
 
@@ -27,6 +28,7 @@ export default function VideoPage() {
   const [progress, setProgress] = useState(0)
   const [downloadedMb, setDownloadedMb] = useState(0)
   const [totalMb, setTotalMb] = useState(0)
+  const [isCached, setIsCached] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
 
   // Load completion status
@@ -37,7 +39,7 @@ export default function VideoPage() {
     saveVideoProgress(user.email, fileId, { lastWatched: Date.now() })
   }, [user, fileId])
 
-  // Download video with auth token, stream into blob for playback
+  // Load video: check cache first, then download with auth token
   useEffect(() => {
     if (!fileId || !user?.token) {
       setPlayerMode('iframe')
@@ -47,11 +49,22 @@ export default function VideoPage() {
     let cancelled = false
     let objectUrl: string | null = null
 
-    async function downloadVideo() {
+    async function loadVideo() {
       try {
         setPlayerMode('loading')
         setProgress(0)
 
+        // 1) Check the cache first
+        const cachedUrl = await getCachedVideo(fileId!)
+        if (cachedUrl && !cancelled) {
+          objectUrl = cachedUrl
+          setBlobUrl(cachedUrl)
+          setIsCached(true)
+          setPlayerMode('native')
+          return
+        }
+
+        // 2) Not cached — download from Drive
         const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
           headers: { Authorization: `Bearer ${user!.token}` },
         })
@@ -62,8 +75,7 @@ export default function VideoPage() {
         }
 
         const contentLength = Number(res.headers.get('Content-Length') || 0)
-        const total = contentLength / (1024 * 1024)
-        setTotalMb(Math.round(total * 10) / 10)
+        setTotalMb(Math.round((contentLength / (1024 * 1024)) * 10) / 10)
 
         const reader = res.body?.getReader()
         if (!reader) {
@@ -71,19 +83,15 @@ export default function VideoPage() {
           return
         }
 
-        // Collect all chunks
         const allChunks: ArrayBuffer[] = []
         let received = 0
 
         while (true) {
           const { done, value } = await reader.read()
           if (done || cancelled) break
-
           allChunks.push(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer)
           received += value.byteLength
-
-          const mb = received / (1024 * 1024)
-          setDownloadedMb(Math.round(mb * 10) / 10)
+          setDownloadedMb(Math.round((received / (1024 * 1024)) * 10) / 10)
           if (contentLength > 0) {
             setProgress(Math.min(99, Math.round((received / contentLength) * 100)))
           }
@@ -94,6 +102,11 @@ export default function VideoPage() {
         setProgress(100)
         const mimeType = lesson?.mimeType || res.headers.get('Content-Type') || 'video/mp4'
         const blob = new Blob(allChunks, { type: mimeType })
+
+        // 3) Save to cache for next time
+        await setCachedVideo(fileId!, blob)
+        setIsCached(true)
+
         objectUrl = URL.createObjectURL(blob)
         setBlobUrl(objectUrl)
         setPlayerMode('native')
@@ -102,13 +115,32 @@ export default function VideoPage() {
       }
     }
 
-    downloadVideo()
+    loadVideo()
 
     return () => {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [fileId, user?.token, lesson?.mimeType])
+
+  // Sync isCached state on mount (for returning to cached videos)
+  useEffect(() => {
+    if (!fileId) return
+    isVideoCached(fileId).then(setIsCached)
+  }, [fileId])
+
+  async function handleDeleteCache() {
+    if (!fileId) return
+    await deleteCachedVideo(fileId)
+    setIsCached(false)
+    // Revoke current blob so it doesn't keep memory
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl)
+      setBlobUrl(null)
+    }
+    setPlayerMode('loading')
+    setProgress(0)
+  }
 
   // Cleanup on unmount
   useEffect(() => {
@@ -273,6 +305,20 @@ export default function VideoPage() {
               </div>
 
               <div className="flex items-center gap-3">
+                {isCached && (
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-xs text-green-400 font-medium">
+                      <HardDrive className="w-3.5 h-3.5" /> Em cache
+                    </span>
+                    <button
+                      onClick={handleDeleteCache}
+                      title="Remover do cache"
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 <a
                   href={driveDownloadUrl}
                   target="_blank"
