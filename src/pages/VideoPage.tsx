@@ -30,7 +30,13 @@ export default function VideoPage() {
   const [totalMb, setTotalMb] = useState(0)
   const [isCached, setIsCached] = useState(false)
   const [resumeTime, setResumeTime] = useState(0)    // seconds to resume from
+  const [playbackRate, setPlaybackRate] = useState(() => {
+    const saved = localStorage.getItem('ds:playbackRate')
+    return saved ? parseFloat(saved) : 1
+  })
   const videoRef = useRef<HTMLVideoElement>(null)
+
+  const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 2.5]
 
   // ── Load completion & saved position ──────────────────────────────────────────
   useEffect(() => {
@@ -143,13 +149,15 @@ export default function VideoPage() {
 
   // ── Video position tracking ───────────────────────────────────────────────────
 
-  /** Seek to saved position once metadata is loaded */
+  /** Seek to saved position and restore playback speed once metadata is loaded */
   function handleLoadedMetadata() {
     if (!videoRef.current) return
-    const dur = videoRef.current.duration
+    const video = videoRef.current
+    const dur = video.duration
     if (resumeTime > 5 && dur > 0 && resumeTime < dur - 10) {
-      videoRef.current.currentTime = resumeTime
+      video.currentTime = resumeTime
     }
+    if (playbackRate !== 1) video.playbackRate = playbackRate
   }
 
   /** Save position every 5 accumulated seconds of playback */
@@ -288,20 +296,44 @@ export default function VideoPage() {
 
               {/* Native player */}
               {playerMode === 'native' && blobUrl && (
-                <video
-                  ref={videoRef}
-                  src={blobUrl}
-                  controls
-                  autoPlay
-                  className="w-full rounded-2xl"
-                  style={{ maxHeight: '72vh' }}
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onTimeUpdate={handleTimeUpdate}
-                  onPause={handlePauseOrEnded}
-                  onEnded={handlePauseOrEnded}
-                  onError={handleFallbackToIframe}
-                  title={lesson?.name || 'Vídeo'}
-                />
+                <div>
+                  <video
+                    ref={videoRef}
+                    src={blobUrl}
+                    controls
+                    className="w-full rounded-2xl"
+                    style={{ maxHeight: '72vh' }}
+                    onLoadedMetadata={handleLoadedMetadata}
+                    onTimeUpdate={handleTimeUpdate}
+                    onPause={handlePauseOrEnded}
+                    onEnded={handlePauseOrEnded}
+                    onError={handleFallbackToIframe}
+                    title={lesson?.name || 'Vídeo'}
+                  />
+                  {/* Speed controls */}
+                  <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
+                    <span className="text-xs text-gray-500 mr-1">Velocidade:</span>
+                    {SPEEDS.map(speed => (
+                      <button
+                        key={speed}
+                        onClick={() => {
+                          const newRate = speed
+                          setPlaybackRate(newRate)
+                          localStorage.setItem('ds:playbackRate', String(newRate))
+                          if (videoRef.current) videoRef.current.playbackRate = newRate
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all duration-150
+                          ${
+                            playbackRate === speed
+                              ? 'bg-brand-600 text-white shadow shadow-brand-500/30'
+                              : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                          }`}
+                      >
+                        {speed === 1 ? '1×' : `${speed}×`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
 
               {/* iframe Fallback */}
