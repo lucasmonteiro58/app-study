@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CourseLesson } from '../types'
 import { getVideoProgress, saveVideoProgress, markVideoCompleted } from '../services/progressService'
-import { getVideoEmbedUrl } from '../services/driveService'
 import Navbar from '../components/Navbar'
 import NotesPanel from '../components/NotesPanel'
-import { CheckCircle2, StickyNote, ExternalLink } from 'lucide-react'
+import { CheckCircle2, StickyNote, ExternalLink, AlertTriangle, RefreshCw, Download } from 'lucide-react'
+
+type PlayerMode = 'loading' | 'native' | 'iframe' | 'error'
+
+const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 
 export default function VideoPage() {
   const { folderId, fileId } = useParams<{ folderId: string; fileId: string }>()
@@ -19,16 +22,101 @@ export default function VideoPage() {
 
   const [completed, setCompleted] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
+  const [playerMode, setPlayerMode] = useState<PlayerMode>('loading')
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [downloadedMb, setDownloadedMb] = useState(0)
+  const [totalMb, setTotalMb] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
-  const embedUrl = getVideoEmbedUrl(fileId || '')
-
+  // Load completion status
   useEffect(() => {
     if (!user || !fileId) return
     const prog = getVideoProgress(user.email, fileId)
     if (prog) setCompleted(prog.completed)
-    // Record visit time
     saveVideoProgress(user.email, fileId, { lastWatched: Date.now() })
   }, [user, fileId])
+
+  // Download video with auth token, stream into blob for playback
+  useEffect(() => {
+    if (!fileId || !user?.token) {
+      setPlayerMode('iframe')
+      return
+    }
+
+    let cancelled = false
+    let objectUrl: string | null = null
+
+    async function downloadVideo() {
+      try {
+        setPlayerMode('loading')
+        setProgress(0)
+
+        const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
+          headers: { Authorization: `Bearer ${user!.token}` },
+        })
+
+        if (!res.ok || cancelled) {
+          if (!cancelled) setPlayerMode('iframe')
+          return
+        }
+
+        const contentLength = Number(res.headers.get('Content-Length') || 0)
+        const total = contentLength / (1024 * 1024)
+        setTotalMb(Math.round(total * 10) / 10)
+
+        const reader = res.body?.getReader()
+        if (!reader) {
+          if (!cancelled) setPlayerMode('iframe')
+          return
+        }
+
+        // Collect all chunks
+        const allChunks: ArrayBuffer[] = []
+        let received = 0
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done || cancelled) break
+
+          allChunks.push(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer)
+          received += value.byteLength
+
+          const mb = received / (1024 * 1024)
+          setDownloadedMb(Math.round(mb * 10) / 10)
+          if (contentLength > 0) {
+            setProgress(Math.min(99, Math.round((received / contentLength) * 100)))
+          }
+        }
+
+        if (cancelled) return
+
+        setProgress(100)
+        const mimeType = lesson?.mimeType || res.headers.get('Content-Type') || 'video/mp4'
+        const blob = new Blob(allChunks, { type: mimeType })
+        objectUrl = URL.createObjectURL(blob)
+        setBlobUrl(objectUrl)
+        setPlayerMode('native')
+      } catch {
+        if (!cancelled) setPlayerMode('iframe')
+      }
+    }
+
+    downloadVideo()
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [fileId, user?.token, lesson?.mimeType])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function handleToggleComplete() {
     if (!user || !fileId) return
@@ -40,6 +128,12 @@ export default function VideoPage() {
       setCompleted(true)
     }
   }
+
+  function handleFallbackToIframe() {
+    setPlayerMode('iframe')
+  }
+
+  const driveDownloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
 
   return (
     <div className="min-h-screen bg-surface-900 bg-mesh">
@@ -56,30 +150,100 @@ export default function VideoPage() {
 
       <div className="max-w-7xl mx-auto px-4 pt-24 pb-16">
         <div className="flex gap-6 items-start">
-          {/* Video Section */}
           <div className="flex-1 min-w-0">
             {/* Title */}
             <div className="mb-5 animate-fade-in">
               <div className="flex items-center gap-2 mb-1">
                 <span className="badge-video">Vídeo</span>
-                {completed && <span className="badge-done flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Concluído</span>}
+                {completed && (
+                  <span className="badge-done flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Concluído
+                  </span>
+                )}
               </div>
-              {topic?.name && (
-                <p className="text-sm text-brand-400 font-medium mb-1">{topic.name}</p>
-              )}
+              {topic?.name && <p className="text-sm text-brand-400 font-medium mb-1">{topic.name}</p>}
               <h1 className="text-2xl font-bold text-white">{lesson?.name || 'Vídeo'}</h1>
             </div>
 
-            {/* Video Frame */}
-            <div className="relative bg-black rounded-2xl overflow-hidden animate-slide-up" style={{ paddingTop: '56.25%' }}>
-              <iframe
-                id="video-player"
-                src={embedUrl}
-                className="absolute inset-0 w-full h-full"
-                allow="autoplay"
-                allowFullScreen
-                title={lesson?.name || 'Vídeo'}
-              />
+            {/* Player area */}
+            <div
+              className="relative bg-black rounded-2xl overflow-hidden animate-slide-up"
+              style={{ paddingTop: (playerMode === 'loading' || playerMode === 'error') ? '56.25%' : undefined }}
+            >
+              {/* ── Loading ── */}
+              {playerMode === 'loading' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-8">
+                  <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-full max-w-xs text-center">
+                    <p className="text-white text-sm font-semibold mb-3">
+                      {progress === 0 ? 'Conectando ao Drive…' : 'Baixando vídeo para reprodução…'}
+                    </p>
+                    {progress > 0 && (
+                      <>
+                        <div className="h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+                          <div
+                            className="h-full bg-brand-500 rounded-full transition-all duration-300"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-gray-400">
+                          {downloadedMb} MB{totalMb > 0 ? ` / ${totalMb} MB` : ''} &nbsp;·&nbsp; {progress}%
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleFallbackToIframe}
+                    className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5 transition-colors mt-2"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Usar player do Drive (pode não funcionar)
+                  </button>
+                </div>
+              )}
+
+              {/* ── Native player ── */}
+              {playerMode === 'native' && blobUrl && (
+                <video
+                  ref={videoRef}
+                  src={blobUrl}
+                  controls
+                  autoPlay
+                  className="w-full rounded-2xl"
+                  style={{ maxHeight: '72vh' }}
+                  onError={handleFallbackToIframe}
+                  title={lesson?.name || 'Vídeo'}
+                />
+              )}
+
+              {/* ── iframe Fallback ── */}
+              {playerMode === 'iframe' && (
+                <div style={{ paddingTop: '56.25%', position: 'relative' }}>
+                  <iframe
+                    id="video-player"
+                    src={`https://drive.google.com/file/d/${fileId}/preview`}
+                    className="absolute inset-0 w-full h-full"
+                    allow="autoplay"
+                    allowFullScreen
+                    title={lesson?.name || 'Vídeo'}
+                  />
+                  <div className="absolute top-2 right-2 bg-yellow-500/20 border border-yellow-500/30 rounded-lg px-3 py-1.5 flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                    <span className="text-xs text-yellow-300">Player do Drive — pode não funcionar para arquivos grandes</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Error ── */}
+              {playerMode === 'error' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+                  <AlertTriangle className="w-10 h-10 text-yellow-400" />
+                  <p className="text-white font-semibold">Não foi possível reproduzir</p>
+                  <p className="text-gray-400 text-sm max-w-sm">
+                    Tente baixar o vídeo ou abrí-lo no Google Drive.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Actions */}
@@ -108,14 +272,24 @@ export default function VideoPage() {
                 </button>
               </div>
 
-              <a
-                href={`https://drive.google.com/file/d/${fileId}/view`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                <ExternalLink className="w-4 h-4" /> Abrir no Drive
-              </a>
+              <div className="flex items-center gap-3">
+                <a
+                  href={driveDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  <Download className="w-4 h-4" /> Baixar
+                </a>
+                <a
+                  href={`https://drive.google.com/file/d/${fileId}/view`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  <ExternalLink className="w-4 h-4" /> Abrir no Drive
+                </a>
+              </div>
             </div>
           </div>
 
