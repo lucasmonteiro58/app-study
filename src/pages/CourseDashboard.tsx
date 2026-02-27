@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CourseModule } from '../types'
 import { buildCourseStructure } from '../services/driveService'
-import { calculateModuleProgress, calculateCourseProgress } from '../services/progressService'
+import { calculateModuleProgress, calculateCourseProgress, saveCourseToFirebase, getCourseFromFirebase } from '../services/progressService'
 import Navbar from '../components/Navbar'
 import ProgressRing from '../components/ProgressRing'
 import ModuleCard from '../components/ModuleCard'
@@ -25,6 +25,7 @@ export default function CourseDashboard() {
   useEffect(() => {
     if (!folderId || !user) return
 
+    // 1️⃣ localStorage — instant
     const cached = localStorage.getItem(`ds:course:${folderId}`)
     if (cached) {
       setCourseData(JSON.parse(cached))
@@ -32,13 +33,25 @@ export default function CourseDashboard() {
       return
     }
 
-    buildCourseStructure(folderId, user.token)
-      .then(data => {
-        localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data))
-        setCourseData(data)
-      })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false))
+    // 2️⃣ Firebase — fast (cross-device cache)
+    getCourseFromFirebase(user.email, folderId).then(firebaseData => {
+      if (firebaseData) {
+        localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(firebaseData))
+        setCourseData(firebaseData as CourseData)
+        setLoading(false)
+        return
+      }
+
+      // 3️⃣ Drive API — slow (first time or force refresh)
+      buildCourseStructure(folderId, user.token)
+        .then(data => {
+          localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data))
+          saveCourseToFirebase(user.email, folderId, data)
+          setCourseData(data)
+        })
+        .catch(err => setError(err.message))
+        .finally(() => setLoading(false))
+    })
   }, [folderId, user])
 
   if (loading) {
@@ -99,7 +112,11 @@ export default function CourseDashboard() {
               localStorage.removeItem(`ds:course:${folderId}`)
               setLoading(true)
               buildCourseStructure(folderId!, user!.token)
-                .then(data => { localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data)); setCourseData(data) })
+                .then(data => {
+                  localStorage.setItem(`ds:course:${folderId}`, JSON.stringify(data))
+                  saveCourseToFirebase(user!.email, folderId!, data)
+                  setCourseData(data)
+                })
                 .catch(err => setError(err.message))
                 .finally(() => setLoading(false))
             }}

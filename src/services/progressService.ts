@@ -240,6 +240,38 @@ export function addRecentCourse(course: RecentCourse, userId?: string) {
   }
 }
 
+// ── Course Structure Cache ────────────────────────────────────────────────────
+
+/** Saves the parsed course structure to Firestore for cross-device caching. */
+export async function saveCourseToFirebase(userId: string, folderId: string, data: object) {
+  if (!userId || !folderId) return
+  try {
+    await setDoc(doc(db, `users/${userId}/courses/${folderId}`), { data, savedAt: Date.now() })
+  } catch (err: unknown) {
+    // Firestore has a 1MB document limit — silently skip if exceeded
+    const msg = err instanceof Error ? err.message : ''
+    if (!msg.includes('Document exceeds maximum size')) {
+      console.error('Error saving course to Firebase:', err)
+    }
+  }
+}
+
+/** Loads the cached course structure from Firestore (returns null if not found). */
+export async function getCourseFromFirebase(
+  userId: string,
+  folderId: string,
+): Promise<{ name: string; modules: unknown[] } | null> {
+  if (!userId || !folderId) return null
+  try {
+    const snap = await getDoc(doc(db, `users/${userId}/courses/${folderId}`))
+    if (!snap.exists()) return null
+    return snap.data().data ?? null
+  } catch (err) {
+    console.error('Error loading course from Firebase:', err)
+    return null
+  }
+}
+
 /** Fetches the recent courses list directly from Firestore and updates localStorage. */
 export async function getRecentCoursesFromFirebase(userId: string): Promise<RecentCourse[]> {
   if (!userId) return getRecentCourses()
