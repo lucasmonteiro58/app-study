@@ -6,7 +6,7 @@ import { getVideoProgress, saveVideoProgress, markVideoCompleted } from '../serv
 import { getCachedVideo, setCachedVideo, deleteCachedVideo, isVideoCached } from '../services/videoCacheService'
 import Navbar from '../components/Navbar'
 import NotesPanel from '../components/NotesPanel'
-import { CheckCircle2, StickyNote, ExternalLink, AlertTriangle, RefreshCw, Download, HardDrive, Trash2 } from 'lucide-react'
+import { CheckCircle2, StickyNote, ExternalLink, AlertTriangle, RefreshCw, Download, HardDrive, Trash2, History } from 'lucide-react'
 
 type PlayerMode = 'loading' | 'native' | 'iframe' | 'error'
 
@@ -29,17 +29,21 @@ export default function VideoPage() {
   const [downloadedMb, setDownloadedMb] = useState(0)
   const [totalMb, setTotalMb] = useState(0)
   const [isCached, setIsCached] = useState(false)
+  const [resumeTime, setResumeTime] = useState(0)    // seconds to resume from
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  // Load completion status
+  // ── Load completion & saved position ──────────────────────────────────────────
   useEffect(() => {
     if (!user || !fileId) return
     const prog = getVideoProgress(user.email, fileId)
-    if (prog) setCompleted(prog.completed)
+    if (prog) {
+      setCompleted(prog.completed)
+      setResumeTime(prog.timestamp ?? 0)
+    }
     saveVideoProgress(user.email, fileId, { lastWatched: Date.now() })
   }, [user, fileId])
 
-  // Load video: check cache first, then download with auth token
+  // ── Load video: check cache then download ─────────────────────────────────────
   useEffect(() => {
     if (!fileId || !user?.token) {
       setPlayerMode('iframe')
@@ -54,7 +58,7 @@ export default function VideoPage() {
         setPlayerMode('loading')
         setProgress(0)
 
-        // 1) Check the cache first
+        // 1) Check cache first
         const cachedUrl = await getCachedVideo(fileId!)
         if (cachedUrl && !cancelled) {
           objectUrl = cachedUrl
@@ -64,7 +68,7 @@ export default function VideoPage() {
           return
         }
 
-        // 2) Not cached — download from Drive
+        // 2) Download from Drive
         const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
           headers: { Authorization: `Bearer ${user!.token}` },
         })
@@ -103,7 +107,7 @@ export default function VideoPage() {
         const mimeType = lesson?.mimeType || res.headers.get('Content-Type') || 'video/mp4'
         const blob = new Blob(allChunks, { type: mimeType })
 
-        // 3) Save to cache for next time
+        // 3) Save to cache
         await setCachedVideo(fileId!, blob)
         setIsCached(true)
 
@@ -123,32 +127,56 @@ export default function VideoPage() {
     }
   }, [fileId, user?.token, lesson?.mimeType])
 
-  // Sync isCached state on mount (for returning to cached videos)
+  // Sync isCached badge on mount
   useEffect(() => {
     if (!fileId) return
     isVideoCached(fileId).then(setIsCached)
   }, [fileId])
 
-  async function handleDeleteCache() {
-    if (!fileId) return
-    await deleteCachedVideo(fileId)
-    setIsCached(false)
-    // Revoke current blob so it doesn't keep memory
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl)
-      setBlobUrl(null)
-    }
-    setPlayerMode('loading')
-    setProgress(0)
-  }
-
-  // Cleanup on unmount
+  // Cleanup blob URL on unmount
   useEffect(() => {
     return () => {
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── Video position tracking ───────────────────────────────────────────────────
+
+  /** Seek to saved position once metadata is loaded */
+  function handleLoadedMetadata() {
+    if (!videoRef.current) return
+    const dur = videoRef.current.duration
+    if (resumeTime > 5 && dur > 0 && resumeTime < dur - 10) {
+      videoRef.current.currentTime = resumeTime
+    }
+  }
+
+  /** Save position every 5 accumulated seconds of playback */
+  function handleTimeUpdate() {
+    if (!user || !fileId || !videoRef.current) return
+    const video = videoRef.current
+    if (video.paused || video.ended) return
+    const sec = Math.floor(video.currentTime)
+    if (sec % 5 === 0 && sec > 0) {
+      saveVideoProgress(user.email, fileId, {
+        timestamp: video.currentTime,
+        duration: video.duration,
+      })
+    }
+  }
+
+  /** Save exact position on pause / end */
+  function handlePauseOrEnded() {
+    if (!user || !fileId || !videoRef.current) return
+    const video = videoRef.current
+    saveVideoProgress(user.email, fileId, {
+      timestamp: video.currentTime,
+      duration: video.duration,
+    })
+  }
+
+  // ── Actions ───────────────────────────────────────────────────────────────────
 
   function handleToggleComplete() {
     if (!user || !fileId) return
@@ -165,7 +193,26 @@ export default function VideoPage() {
     setPlayerMode('iframe')
   }
 
+  async function handleDeleteCache() {
+    if (!fileId) return
+    await deleteCachedVideo(fileId)
+    setIsCached(false)
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl)
+      setBlobUrl(null)
+    }
+    setPlayerMode('loading')
+    setProgress(0)
+  }
+
   const driveDownloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+
+  // Format seconds → "mm:ss"
+  function fmtTime(s: number) {
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
 
   return (
     <div className="min-h-screen bg-surface-900 bg-mesh">
@@ -192,17 +239,22 @@ export default function VideoPage() {
                     <CheckCircle2 className="w-3 h-3" /> Concluído
                   </span>
                 )}
+                {resumeTime > 5 && playerMode === 'native' && (
+                  <span className="flex items-center gap-1 text-xs text-amber-400 font-medium">
+                    <History className="w-3 h-3" /> Retomando em {fmtTime(resumeTime)}
+                  </span>
+                )}
               </div>
               {topic?.name && <p className="text-sm text-brand-400 font-medium mb-1">{topic.name}</p>}
               <h1 className="text-2xl font-bold text-white">{lesson?.name || 'Vídeo'}</h1>
             </div>
 
-            {/* Player area */}
+            {/* Player */}
             <div
               className="relative bg-black rounded-2xl overflow-hidden animate-slide-up"
               style={{ paddingTop: (playerMode === 'loading' || playerMode === 'error') ? '56.25%' : undefined }}
             >
-              {/* ── Loading ── */}
+              {/* Loading */}
               {playerMode === 'loading' && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-8">
                   <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
@@ -226,7 +278,7 @@ export default function VideoPage() {
                   </div>
                   <button
                     onClick={handleFallbackToIframe}
-                    className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5 transition-colors mt-2"
+                    className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5 transition-colors"
                   >
                     <RefreshCw className="w-3 h-3" />
                     Usar player do Drive (pode não funcionar)
@@ -234,7 +286,7 @@ export default function VideoPage() {
                 </div>
               )}
 
-              {/* ── Native player ── */}
+              {/* Native player */}
               {playerMode === 'native' && blobUrl && (
                 <video
                   ref={videoRef}
@@ -243,12 +295,16 @@ export default function VideoPage() {
                   autoPlay
                   className="w-full rounded-2xl"
                   style={{ maxHeight: '72vh' }}
+                  onLoadedMetadata={handleLoadedMetadata}
+                  onTimeUpdate={handleTimeUpdate}
+                  onPause={handlePauseOrEnded}
+                  onEnded={handlePauseOrEnded}
                   onError={handleFallbackToIframe}
                   title={lesson?.name || 'Vídeo'}
                 />
               )}
 
-              {/* ── iframe Fallback ── */}
+              {/* iframe Fallback */}
               {playerMode === 'iframe' && (
                 <div style={{ paddingTop: '56.25%', position: 'relative' }}>
                   <iframe
@@ -266,14 +322,12 @@ export default function VideoPage() {
                 </div>
               )}
 
-              {/* ── Error ── */}
+              {/* Error */}
               {playerMode === 'error' && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
                   <AlertTriangle className="w-10 h-10 text-yellow-400" />
                   <p className="text-white font-semibold">Não foi possível reproduzir</p>
-                  <p className="text-gray-400 text-sm max-w-sm">
-                    Tente baixar o vídeo ou abrí-lo no Google Drive.
-                  </p>
+                  <p className="text-gray-400 text-sm max-w-sm">Tente baixar o vídeo ou abrí-lo no Google Drive.</p>
                 </div>
               )}
             </div>

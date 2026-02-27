@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CourseModule, CourseLesson } from '../types'
-import { calculateModuleProgress, isLessonCompleted } from '../services/progressService'
+import { calculateModuleProgress, isLessonCompleted, getVideoProgress } from '../services/progressService'
 import Navbar from '../components/Navbar'
 import NotesPanel from '../components/NotesPanel'
 import {
@@ -50,20 +50,35 @@ function LessonRow({
 }) {
   const completed = isLessonCompleted(userId, lesson.fileId, lesson.type)
   const isActive = activeId === lesson.id
+
+  // Video progress for the thin bar
+  const vidProg = lesson.type === 'video' ? getVideoProgress(userId, lesson.fileId) : null
+  const watchPct = vidProg && vidProg.duration > 0
+    ? Math.min(100, Math.round((vidProg.timestamp / vidProg.duration) * 100))
+    : 0
+
   return (
     <button
       onClick={() => onOpen(lesson)}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150 group
+      className={`w-full flex flex-col gap-1 px-3 py-2.5 rounded-lg text-left transition-all duration-150 group
         ${isActive
           ? 'bg-brand-600/30 border border-brand-500/30 text-white'
           : 'hover:bg-white/5 text-gray-400 hover:text-white'}`}
     >
-      <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center
-        ${lesson.type === 'video' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
-        {lesson.type === 'video' ? <Play className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+      <div className="flex items-center gap-3">
+        <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center
+          ${lesson.type === 'video' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
+          {lesson.type === 'video' ? <Play className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+        </div>
+        <span className="flex-1 text-xs leading-snug truncate">{lesson.name}</span>
+        {completed && <CheckCircle2 className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />}
       </div>
-      <span className="flex-1 text-xs leading-snug truncate">{lesson.name}</span>
-      {completed && <CheckCircle2 className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />}
+      {/* Thin progress bar for partially-watched videos */}
+      {!completed && watchPct > 0 && (
+        <div className="h-0.5 bg-white/10 rounded-full overflow-hidden ml-10">
+          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${watchPct}%` }} />
+        </div>
+      )}
     </button>
   )
 }
@@ -207,6 +222,9 @@ export default function ModulePage() {
   const [showNotes, setShowNotes] = useState(false)
   const [, forceUpdate] = useState(0)
 
+  // Key to persist the last-visited topic for this module
+  const lastTopicKey = moduleId ? `ds:lastTopic:${moduleId}` : null
+
   useEffect(() => {
     const cached = localStorage.getItem(`ds:course:${folderId}`)
     if (cached) setCourseData(JSON.parse(cached))
@@ -217,12 +235,24 @@ export default function ModulePage() {
     return findModule(courseData.modules, moduleId!)
   }, [courseData, moduleId])
 
-  // Auto-select first topic on load
+  // Auto-select: restore last visited topic, or fall back to first topic
   useEffect(() => {
     if (!module || selectedTopicId) return
+    // Try to restore last visited topic
+    const saved = lastTopicKey ? localStorage.getItem(lastTopicKey) : null
+    if (saved && findModule([module], saved)) {
+      setSelectedTopicId(saved)
+      return
+    }
     const firstTopic = findFirstTopic(module)
     if (firstTopic) setSelectedTopicId(firstTopic.id)
-  }, [module])
+  }, [module]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Wrapper that also persists the selection */
+  function selectTopic(id: string) {
+    setSelectedTopicId(id)
+    if (lastTopicKey) localStorage.setItem(lastTopicKey, id)
+  }
 
   const selectedTopic = useMemo(() => {
     if (!module || !selectedTopicId) return null
@@ -312,7 +342,7 @@ export default function ModulePage() {
                       userId={user!.email}
                       folderId={folderId!}
                       selectedTopicId={selectedTopicId}
-                      onSelectTopic={setSelectedTopicId}
+                      onSelectTopic={selectTopic}
                       activeLesson={activeLesson}
                       onOpenLesson={openLesson}
                       defaultOpen={idx === 0}
@@ -404,6 +434,20 @@ export default function ModulePage() {
                 {mainLessons.map((lesson, idx) => {
                   const completed = isLessonCompleted(user!.email, lesson.fileId, lesson.type)
                   const isActive = activeLesson === lesson.id
+
+                  // Video progress
+                  const vidProg = lesson.type === 'video'
+                    ? getVideoProgress(user!.email, lesson.fileId)
+                    : null
+                  const watchPct = vidProg && vidProg.duration > 0
+                    ? Math.min(100, Math.round((vidProg.timestamp / vidProg.duration) * 100))
+                    : 0
+                  const fmtTime = (s: number) => {
+                    const m = Math.floor(s / 60)
+                    const sec = Math.floor(s % 60)
+                    return `${m}:${sec.toString().padStart(2, '0')}`
+                  }
+
                   return (
                     <button
                       key={lesson.id}
@@ -422,9 +466,24 @@ export default function ModulePage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-white truncate">{lesson.name}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {lesson.type === 'video' ? '▶ Vídeo' : '📄 PDF / Apostila'}
-                        </p>
+                        {!completed && watchPct > 0 ? (
+                          // Show progress bar + time
+                          <div className="mt-1.5">
+                            <div className="h-1 bg-white/10 rounded-full overflow-hidden max-w-[160px]">
+                              <div
+                                className="h-full bg-brand-500 rounded-full"
+                                style={{ width: `${watchPct}%` }}
+                              />
+                            </div>
+                            <p className="text-xs text-brand-400 mt-0.5">
+                              {watchPct}% assistido · parou em {fmtTime(vidProg!.timestamp)}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {lesson.type === 'video' ? '▶ Vídeo' : '📄 PDF / Apostila'}
+                          </p>
+                        )}
                       </div>
                       {completed ? (
                         <span className="badge-done flex items-center gap-1 flex-shrink-0">
